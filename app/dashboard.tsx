@@ -7,7 +7,7 @@ import {
 } from 'expo-audio';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { FloatingRecommendationCard } from '@/components/FloatingRecommendationCard';
@@ -194,17 +194,20 @@ export default function DashboardScreen() {
       }
 
       // Check file existence and size to guarantee the recorder actually wrote audio
-      let fileInfo: { exists?: boolean; size?: number } | null = null;
-      try {
-        fileInfo = await FileSystem.getInfoAsync(uri);
-        console.log('[AudioDebug] fileInfo=', fileInfo);
-        setStatus(`Archivo guardado: ${fileInfo.size ?? 0} bytes`);
-        if (!fileInfo.exists || (fileInfo.size ?? 0) === 0) {
-          setStatus('Archivo de audio vacío (0 bytes). Revisa permisos y vuelve a intentar.');
-          return;
+      // getInfoAsync is not available on web (blob: URIs are managed by the browser)
+      if (Platform.OS !== 'web') {
+        let fileInfo: { exists?: boolean; size?: number } | null = null;
+        try {
+          fileInfo = await FileSystem.getInfoAsync(uri);
+          console.log('[AudioDebug] fileInfo=', fileInfo);
+          setStatus(`Archivo guardado: ${fileInfo.size ?? 0} bytes`);
+          if (!fileInfo.exists || (fileInfo.size ?? 0) === 0) {
+            setStatus('Archivo de audio vacío (0 bytes). Revisa permisos y vuelve a intentar.');
+            return;
+          }
+        } catch (err) {
+          console.log('[AudioDebug] getInfoAsync fallo', err);
         }
-      } catch (err) {
-        console.log('[AudioDebug] getInfoAsync fallo', err);
       }
 
       setStatus('Procesando características...');
@@ -225,7 +228,7 @@ export default function DashboardScreen() {
         fallbackNormalized
       );
 
-      const result = await runConcentrationInference(uri, undefined, fallbackNormalized);
+      const result = await runConcentrationInference(uri, fallbackNormalized);
       setLabel(result.label);
       setMetrics({
         rms: result.features.rms,

@@ -3,6 +3,8 @@ import { Platform } from 'react-native';
 
 import { computeRms, computeZcr, splitIntoFrames } from '@/lib/audio/dsp';
 
+const BACKEND_URL = 'http://localhost:8000';
+
 export type ConcentrationLabel = 'Favorable' | 'Moderado' | 'No Favorable';
 
 export type AudioFeatures = {
@@ -154,6 +156,59 @@ function classifyByHeuristic(features: AudioFeatures): InferenceResult {
   return { label: 'Favorable', score, features, usedModelFiles: false };
 }
 
+function normalizeLabel(raw: string): ConcentrationLabel {
+  switch (raw.trim().toLowerCase()) {
+    case 'favorable': return 'Favorable';
+    case 'moderado': return 'Moderado';
+    default: return 'No Favorable';
+  }
+}
+
+async function tryBackendInference(uri: string): Promise<InferenceResult | null> {
+  try {
+    const formData = new FormData();
+
+    if (uri.startsWith('blob:') || uri.startsWith('http')) {
+      const blobResponse = await fetch(uri);
+      const blob = await blobResponse.blob();
+      formData.append('file', blob, 'audio.wav');
+    } else {
+      // React Native: FormData acepta { uri, name, type } para rutas file://
+      formData.append('file', { uri, name: 'audio.wav', type: 'audio/wav' } as unknown as Blob);
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    const response = await fetch(`${BACKEND_URL}/analyze`, {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+
+    return {
+      label: normalizeLabel(data.label),
+      score: data.score,
+      features: {
+        rms: data.features.rms,
+        zcr: data.features.zcr,
+        spectralCentroid: data.features.spectral_centroid,
+        mfcc: data.features.mfcc,
+        analyzedSeconds: data.features.analyzed_seconds ?? 0,
+      },
+      usedModelFiles: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function normalizeRecordingLevel(level: number): number {
   if (!Number.isFinite(level)) return 0;
 
@@ -201,18 +256,14 @@ function classifyByRecordingLevel(level: number): InferenceResult {
 
 export async function runConcentrationInference(
   uri: string,
-  modelUris?: { modelPklUri?: string; scalerPklUri?: string },
   recordingLevel?: number
 ): Promise<InferenceResult> {
   try {
-    const features = await extractFeaturesFromAudioFile(uri);
-    const hasModelFiles = Boolean(modelUris?.modelPklUri && modelUris?.scalerPklUri);
+    const backendResult = await tryBackendInference(uri);
+    if (backendResult) return backendResult;
 
-    const result = classifyByHeuristic(features);
-    return {
-      ...result,
-      usedModelFiles: hasModelFiles,
-    };
+    const features = await extractFeaturesFromAudioFile(uri);
+    return classifyByHeuristic(features);
   } catch (error) {
     if (typeof recordingLevel === 'number') {
       return classifyByRecordingLevel(recordingLevel);
